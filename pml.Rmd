@@ -1,0 +1,171 @@
+---
+title: "Exercise Classification Prediction"
+author: "Ian Gordon"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+*"Essentially, all models are wrong, but some are useful."* [^1]
+
+### Introduction
+Given a data set of exercise activity measurements, we will build a prediction model to
+classify the exercise movements. The goal is to correctly classify each of the exercise observations according to the criteria specified.
+
+The data sets for this analysis come from [Human Activity Recognition](http://groupware.les.inf.puc-rio.br/har)
+site, [^2].
+
+The data for each observation has been classified according to the following criteria (and the result is
+under the column *classe*). This is what we wish to predict from the file containing the testing data.
+
+* A - exactly according to the specification
+
+* B - throwing the elbows to the front
+
+* C - lifting the dumbbell only halfway
+
+* D - lowering the dumbbell only halfway
+
+* E - throwing the hips to the front
+
+### Load required packages
+```{r loadRequiredPackages}
+library(caret)
+library(randomForest)
+```
+
+### Read data
+The data sets used for training and testing have been downloaded and are assumed to exist in the same
+folder as this Rmd file.
+
+```{r readData}
+training <- read.csv("pml-training.csv", header=TRUE)
+testing <- read.csv("pml-testing.csv", header=TRUE)
+```
+
+### Data cleaning
+Looking at the data, we see that there are 160 variables, but a lot are either NA or are empty or
+are #DIV/0! or seem to have no impact on the classification. These can be considered to be incomplete
+or invalid measurements. We could try to fix the data set by imputting some of the missing values, but
+the number of missing/NA/invalid values in the data set is too high. To simplify the building of our
+prediction model, we will remove such variables and only work with rows that are complete.
+
+```{r removeNAandEmpty}
+# We can remove the first column. The user_name will not help us with our classification.
+# Remove columns that contain #DIV/0! or values that are very suspicious. (The columns to
+# removed were determined by a visual inspection of the data.) We simply specify the first part
+# of the name of each column (or set of columns) to be removed.
+colsToBeRemoved <- "^amplitude|^avg|^cvtd|^kurtosis|^max|^min|^new|^raw|^skewness|^stddev|^user|^var|^X"
+
+training <- training[,-grep(colsToBeRemoved, colnames(training))]
+testing <- testing[,-grep(colsToBeRemoved, colnames(testing))]
+
+# How many observations in each data set?
+dim(training)
+dim(testing)
+
+# Do any of the remaining variables have near zero variance? If not, then we have no other variables
+# to remove.
+length(nearZeroVar(training))
+```
+
+### Split training data into train and test sets
+Split the data so that 60% is assigned to our training set and 40% to our test set.
+
+```{r splitTrainingData}
+set.seed(31415) # Mmm... pie.
+inTrain <- createDataPartition(y=training$classe, p=0.6, list=FALSE)
+dataTrain <- training[inTrain,]
+dataTest <- training[-inTrain,]
+```
+
+### Build and validate model
+This classification prediction exercise will use the Random Forest model from the caret package. This model
+was chosen because of its accuracy. However, among the cons of using this model are its speed, or the lack
+thereof, and overfitting. We cannot do much about the speed but we can use cross-validation to reduce
+overfitting.
+
+(For more information about the random forest algorithm and overfitting, see **Practical Data Science with R**,
+Nina Zumel and John Mount, Manning Publications, Inc, 2014, Pp. 211-22.)
+
+```{r buildModel}
+# Specify parameters for cross-validation of the model.
+# To ensure that the model is as accurate as possible and to avoid overfitting, we specify 5 folds for
+# cross-validation as the model is being built.
+control <- trainControl(method="cv", number=5)
+
+# Build the random forest model using the cross-validation parameters specified.
+modFit <- train(classe ~ ., data=dataTrain, method="rf", metric="Kappa", trControl=control, allowParallel=TRUE)
+modFit
+modFit$finalModel
+
+modFit$results$Accuracy[2]
+```
+
+This shows an estimated model accuracy of approximately 99.5%
+
+Which variables are the most important in our model? Although this information is not important at this
+point, it does give us some insight into what the model is doing and which variables it considers to
+be the most important.
+
+```{r varImp}
+varImp(modFit, scale=FALSE)
+```
+
+Test the model against the subset of data that was set aside for testing.
+```{r validateModel}
+predictions <- predict(modFit, newdata=dataTest)
+results <- table(predictions, dataTest$classe)
+
+confusionmatrix <- confusionMatrix(predictions, dataTest$classe)
+confusionmatrix
+
+# Show the overall accuracy of the model.
+confusionmatrix$overall[1]
+```
+
+The confusion matrix reports the accuracy of the model at approximately 99.6%, a rather high
+level of accuracy. But is compares well with the accuracy we saw when building the model, which
+suggests that overfitting is not a problem.
+
+Interestingly, the accuracy of the subset of the training data and of the testing data are
+approximately the same. This suggests that, despite the opening quote, our Random Forest
+classification model is a good one. (Or it might also suggest a remarkable similarity between
+the training and test data.)
+
+### Out of sample error
+```{r outOfSampleError}
+outOfSampleError <- 1 - sum(diag(results)) / length(predictions)
+```
+
+The out of sample error, an indication of the accuracy of the model, is `r outOfSampleError`
+or `r outOfSampleError * 100`%.
+
+### The **real** test
+Now that we have a model that seems to be reasonably accurate, try this model on the file containing
+the test data and show its predictions/classifications.
+
+```{r finalTest}
+testPredictions <- predict(modFit, newdata=testing)
+testPredictions
+summary(testPredictions)
+```
+
+### Write test results
+For each observation in the testing data set, write the classification to a text file.
+
+```{r writeAnswers}
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+
+pml_write_files(testPredictions)
+```
+
+[^1]: George E.P. Box
+
+[^2]: Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+
